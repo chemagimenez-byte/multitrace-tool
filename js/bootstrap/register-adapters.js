@@ -18,7 +18,7 @@
     registry.register(window.MultiTraceExeLearningAdapter);
   }
 
-  // NUEVO: registrar adaptador de SCORMs generados por LLM
+  // NUEVO: registrar adaptador de LLM (Debe ir el último, es la red de seguridad)
   if (window.MultiTraceLLMAdapter) {
     registry.register(window.MultiTraceLLMAdapter);
   }
