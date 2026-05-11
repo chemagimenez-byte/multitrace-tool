@@ -1,57 +1,24 @@
 (function() {
     console.log("[DEBUG] Creando objeto Adaptador LLM...");
 
-    // CORRECCIÓN: Usar el nombre exacto definido en el detector (MultiTraceLLMDetector)
+    // Asegurarnos de que el detector y el patch están disponibles globalmente
     const Detector = window.MultiTraceLLMDetector;
     const getPatch = window.getLLMTracePatch;
 
     if (!Detector || !getPatch) {
         console.error("[ERROR] Faltan dependencias del adaptador LLM (Detector o Patch).");
-        console.error("Detector encontrado:", !!Detector, "| Patch encontrado:", !!getPatch);
         return;
     }
 
-    // Definimos el adaptador como un OBJETO LITERAL, igual que Rise y Storyline
+    // Definimos el adaptador como un OBJETO LITERAL
     window.MultiTraceLLMAdapter = {
         id: 'llm-scorm',
         name: 'LLM Generated SCORM',
         
-        /**
-         * Comprueba si el paquete es un SCORM genérico (LLM)
-         */
         supports: function(zipContents, manifest) {
-            console.log("[DEBUG LLM] Ejecutando detección para:", zipContents.filename || "paquete.zip");
-            
-            // 1. Comprobación básica de manifiesto
-            if (!manifest) {
-                console.warn("[DEBUG LLM] Fallo: No hay manifiesto XML.");
-                return false;
-            }
-    
-            // 2. Comprobación de archivos clave
-            const hasIndex = !!(zipContents['index.html'] || zipContents['./index.html']);
-            console.log("[DEBUG LLM] ¿Tiene index.html?", hasIndex);
-    
-            // 3. Comprobación de exclusiones (Rise/Storyline)
-            let isKnownVendor = false;
-            for (const path in zipContents) {
-                if (path.includes('story_content') || path.includes('html5/') || path.includes('rise')) {
-                    isKnownVendor = true;
-                    console.warn("[DEBUG LLM] Fallo: Detectado vendor conocido en ruta:", path);
-                    break;
-                }
-            }
-            if (isKnownVendor) return false;
-    
-            // 4. Llamada al detector
-            const result = window.MultiTraceLLMDetector.detect(zipContents, manifest);
-            console.log("[DEBUG LLM] Resultado final del detector:", result);
-            
-            return result;
+            return Detector.detect(zipContents, manifest);
         },
-        /**
-         * Inyecta la traza en el archivo principal
-         */
+
         process: async function(zipContents, manifest, options = {}) {
             console.log(`[MultiTrace] Procesando paquete como ${this.name}...`);
             
@@ -70,9 +37,12 @@
                 }
             }
 
-            // 2. Fallback: buscar index.html directamente en el ZIP
+            // Fallback: buscar index.html si no se encontró por atributos
             if (!launchFile && zipContents['index.html']) {
                 launchFile = 'index.html';
+            }
+            if (!launchFile && zipContents['./index.html']) {
+                launchFile = './index.html';
             }
 
             if (!launchFile) {
@@ -80,28 +50,43 @@
                 return zipContents;
             }
 
-            // 3. Inyectar el parche
-            if (zipContents[launchFile]) {
-                let content = zipContents[launchFile];
-                
-                // Inyectar antes de </head> o </body>
-                if (content.includes('</head>')) {
-                    content = content.replace('</head>', `${patchScript}\n</head>`);
-                } else if (content.includes('</body>')) {
-                    content = content.replace('</body>', `${patchScript}\n</body>`);
-                } else {
-                    content += `\n${patchScript}`;
-                }
+            console.log(`[LLM Adapter] Archivo objetivo identificado: ${launchFile}`);
 
-                zipContents[launchFile] = content;
-                console.log(`[MultiTrace] Parche LLM inyectado en: ${launchFile}`);
-            } else {
-                console.warn(`[LLM Adapter] El archivo ${launchFile} no existe en el ZIP.`);
+            // 2. Obtener el archivo del ZIP
+            const fileEntry = zipContents[launchFile];
+            if (!fileEntry) {
+                throw new Error(`El archivo ${launchFile} no existe en el ZIP.`);
             }
+
+            // 3. LEER CONTENIDO COMO STRING (CRUCIAL: JSZip devuelve objetos, no strings directos)
+            let content;
+            if (typeof fileEntry.async === 'function') {
+                // Es una entrada de JSZip real
+                content = await fileEntry.async("string");
+            } else {
+                // Ya es un string (caso raro o testing)
+                content = fileEntry;
+            }
+
+            // 4. Inyectar script
+            if (content.includes('</head>')) {
+                content = content.replace('</head>', `${patchScript}\n</head>`);
+            } else if (content.includes('</body>')) {
+                content = content.replace('</body>', `${patchScript}\n</body>`);
+            } else {
+                content += `\n${patchScript}`;
+            }
+
+            // 5. Guardar el contenido modificado de vuelta en el objeto zipContents
+            // Nota: Al modificar zipContents[launchFile] con un string, 
+            // el proceso en zip.js se encargará de escribirlo correctamente al generar el nuevo ZIP.
+            zipContents[launchFile] = content;
+            
+            console.log(`[MultiTrace] Parche LLM inyectado en: ${launchFile}`);
 
             return zipContents;
         }
     };
 
-    console.log("[DEBUG] Adaptador LLM creado exitosamente:", window.MultiTraceLLMAdapter);
+    console.log("[DEBUG] Adaptador LLM creado exitosamente", window.MultiTraceLLMAdapter);
 })();
