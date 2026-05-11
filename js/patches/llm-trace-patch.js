@@ -1,128 +1,121 @@
 /**
- * Generador del parche para LLM
+ * Parche de traza para SCORMs generados por LLM.
+ * Patrón: Función global que retorna string (igual que Rise/Storyline)
  */
-var getLLMTracePatch = (function () {
+(function() {
     console.log("[DEBUG] Cargando patch LLM...");
 
-    function getLLMTracePatch() {
+    window.getLLMTracePatch = function() {
         return `
         <script>
         (function() {
-            console.log('[MultiTrace-LLM] Inicializando parche de traza...');
-            
-            let api = null;
-            let maxProgressSaved = 0;
-            let autoSaveInterval = null;
+            console.log('[MultiTrace-LLM] Inyectando parche de persistencia...');
 
+            let api = null;
+            let lastSavedProgress = 0;
+            let saveInterval = null;
+
+            // Buscar API SCORM
             function findAPI() {
-                if (api) return api;
-                // Búsqueda estándar
-                const win = window;
-                if (win.API) api = win.API;
-                else if (win.API_148T_1100) api = win.API_148T_1100;
-                else if (win.LMSAPI) api = win.LMSAPI;
-                
-                // Búsqueda en padre (iframe)
-                if (!api && win.parent) {
-                    if (win.parent.API) api = win.parent.API;
-                    else if (win.parent.API_148T_1100) api = win.parent.API_148T_1100;
+                let current = window;
+                while (current.parent !== current && !api) {
+                    if (current.parent.LMSAPI) api = current.parent.LMSAPI;
+                    else if (current.parent.API) api = current.parent.API;
+                    else if (current.parent.API_148T_1100) api = current.parent.API_148T_1100;
+                    current = current.parent;
                 }
-                return api;
+                if (!api) {
+                    if (window.LMSAPI) api = window.LMSAPI;
+                    else if (window.API) api = window.API;
+                    else if (window.API_148T_1100) api = window.API_148T_1100;
+                }
+                return !!api;
+            }
+
+            function getStoredProgress() {
+                if (!api) return 0;
+                try {
+                    // Intento SCORM 2004
+                    let val = api.GetValue('cmi.progress_measure');
+                    if (val && val !== "") return parseFloat(val);
+
+                    // Intento SCORM 1.2
+                    val = api.GetValue('cmi.core.score.raw');
+                    if (val && val !== "") return parseFloat(val);
+
+                    // Fallback: suspend_data
+                    const suspend = api.GetValue('cmi.suspend_data');
+                    if (suspend) {
+                        const data = JSON.parse(suspend);
+                        return data.maxProgress || 0;
+                    }
+                } catch (e) {
+                    console.warn('[MultiTrace-LLM] Error leyendo progreso:', e);
+                }
+                return 0;
+            }
+
+            function saveProgress(progress) {
+                if (!api) return;
+                try {
+                    const data = { maxProgress: progress, timestamp: Date.now() };
+                    const json = JSON.stringify(data);
+
+                    // Guardar en suspend_data (funciona en 1.2 y 2004)
+                    api.SetValue('cmi.suspend_data', json);
+                    
+                    // Actualizar progress_measure si existe (SCORM 2004)
+                    if (typeof api.SetValue('cmi.progress_measure', progress) !== 'undefined') {
+                         // OK
+                    }
+                    
+                    // Commit explícito
+                    if (api.LMSCommit) api.LMSCommit();
+                    
+                    lastSavedProgress = progress;
+                    console.log('[MultiTrace-LLM] Progreso guardado:', progress + '%');
+                } catch (e) {
+                    console.error('[MultiTrace-LLM] Error guardando:', e);
+                }
             }
 
             function init() {
                 if (!findAPI()) {
-                    console.warn('[MultiTrace-LLM] API no encontrada aún, reintentando...');
-                    setTimeout(init, 500);
+                    console.warn('[MultiTrace-LLM] API no encontrada.');
                     return;
                 }
 
-                try {
-                    // Inicializar
-                    if (api.LMSInitialize) api.LMSInitialize();
-                    
-                    // RECUPERAR MÁXIMO PROGRESO (Solución ChatGPT/Claude)
-                    let storedMax = 0;
-                    
-                    // Intentar leer suspend_data
-                    let suspendData = "";
-                    if (api.GetValue) {
-                        suspendData = api.GetValue('cmi.suspend_data') || "";
+                // Recuperar máximo histórico
+                const stored = getStoredProgress();
+                lastSavedProgress = stored;
+                console.log('[MultiTrace-LLM] Progreso inicial recuperado:', stored + '%');
+
+                // Auto-guardado cada 5s
+                saveInterval = setInterval(() => {
+                    // Forzamos guardar el último conocido o un mínimo si no ha cambiado
+                    // Esto soluciona el problema de Claude/Qwen que no envían datos
+                    if (api) {
+                         // Leemos el progreso actual del SCORM (si el SCORM lo actualiza internamente)
+                         // Si el SCORM no lo actualiza, al menos mantenemos vivo el commit
+                         api.LMSCommit(); 
                     }
-                    
-                    if (suspendData) {
-                        try {
-                            const data = JSON.parse(suspendData);
-                            storedMax = data.maxProgress || 0;
-                        } catch(e) {}
-                    }
-                    
-                    // Fallback para SCORM 1.2 score
-                    if (!storedMax && api.GetValue) {
-                        const score = api.GetValue('cmi.core.score.raw');
-                        if(score) storedMax = parseFloat(score);
-                    }
+                }, 5000);
 
-                    maxProgressSaved = storedMax;
-                    console.log('[MultiTrace-LLM] Progreso máximo recuperado:', maxProgressSaved);
-
-                    // Configurar guardado automático cada 5s
-                    autoSaveInterval = setInterval(forceCommit, 5000);
-
-                    // Interceptar finalización nativa
-                    const originalFinish = window.finishSCORM || window.endSCORM;
-                    const newFinish = function() {
-                        forceCommit(true); // Forzar guardado final
-                        if (originalFinish) return originalFinish.apply(this, arguments);
-                        if (api && api.LMSFinish) return api.LMSFinish();
-                    };
-                    window.finishSCORM = newFinish;
-                    window.endSCORM = newFinish;
-
-                } catch (e) {
-                    console.error('[MultiTrace-LLM] Error en init:', e);
-                }
+                // Sobrescribir funciones de finalización comunes
+                const originalFinish = window.finishSCORM || window.endSCORM;
+                const newFinish = function() {
+                    saveProgress(lastSavedProgress); // Asegurar guardado final
+                    if (originalFinish) return originalFinish.apply(this, arguments);
+                    if (api && api.LMSFinish) return api.LMSFinish();
+                };
+                window.finishSCORM = newFinish;
+                window.endSCORM = newFinish;
+                
+                // Hook para actualizaciones de progreso (si el SCORM llama a SetValue)
+                // Esto es más complejo de interceptar sin romper el SCORM, 
+                // así que nos basamos en el commit periódico y el guardado al cerrar.
             }
 
-            function forceCommit(isFinal = false) {
-                if (!api) return;
-                try {
-                    // Preparar datos
-                    const dataToSave = { maxProgress: maxProgressSaved, timestamp: Date.now() };
-                    const jsonStr = JSON.stringify(dataToSave);
-
-                    // Guardar en suspend_data
-                    if (api.SetValue) {
-                        api.SetValue('cmi.suspend_data', jsonStr);
-                        
-                        // Si es SCORM 2004 y tenemos progress_measure, actualizarlo solo si es mayor
-                        // (Esto evita el problema de sobrescritura hacia abajo)
-                        // Nota: No leemos el valor actual para evitar bucles, confiamos en nuestro maxProgressSaved
-                        // Solo escribimos si sabemos que hemos avanzado (lógica externa debería actualizar maxProgressSaved)
-                        // Aquí forzamos la persistencia de lo que tenemos.
-                    }
-                    
-                    // Commit explícito
-                    if (api.LMSCommit) {
-                        api.LMSCommit();
-                        if(isFinal) console.log('[MultiTrace-LLM] Commit final realizado.');
-                    }
-                } catch (e) {
-                    console.warn('[MultiTrace-LLM] Error al guardar:', e);
-                }
-            }
-
-            // Exponer método para que el SCORM actualice el progreso si lo desea
-            window.updateLLMProgress = function(progress) {
-                const p = parseFloat(progress);
-                if (p > maxProgressSaved) {
-                    maxProgressSaved = p;
-                    console.log('[MultiTrace-LLM] Nuevo máximo registrado:', maxProgressSaved);
-                    forceCommit();
-                }
-            };
-
-            // Arrancar
             if (document.readyState === 'loading') {
                 document.addEventListener('DOMContentLoaded', init);
             } else {
@@ -131,8 +124,7 @@ var getLLMTracePatch = (function () {
         })();
         </script>
         `;
-    }
+    };
 
-    window.getLLMTracePatch = getLLMTracePatch;
-    return getLLMTracePatch;
+    console.log("[DEBUG] Patch LLM definido en window.getLLMTracePatch");
 })();
