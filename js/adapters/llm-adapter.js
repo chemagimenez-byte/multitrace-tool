@@ -105,72 +105,6 @@
                     }
 
                     if (injectedContent) {
-                        // Sobrescribir el archivo en el objeto ZIP original
-                        // JSZip permite sobrescribir llamando a .file() sobre el zip padre, 
-                        // PERO aquí zipContents es una colección de entradas.
-                        // La estrategia correcta en el flujo actual es devolver el contenido modificado
-                        // O modificar la entrada si es mutable. 
-                        // Dado que processLLMZip en zip.js espera que modifiquemos el zip original passed by reference 
-                        // o devolvamos un mapa, y estamos dentro de un loop asíncrono...
-                        
-                        // CORRECCIÓN: En el flujo actual de zip.js (processLLMZip), pasamos 'zip.files' (zipContents).
-                        // Para modificarlo, debemos usar el método .file() del objeto ZIP raíz que posea estas entradas.
-                        // Sin embargo, aquí solo tenemos las entradas. 
-                        // Solución: El proceso en zip.js debe manejar la escritura. 
-                        // Pero para mantener la compatibilidad con la firma actual, 
-                        // vamos a asumir que el caller (zip.js) iterará sobre los resultados o que modificamos el blob.
-                        
-                        // ACTUALIZACIÓN DE ESTRATEGIA PARA ESTE ADAPTADOR:
-                        // Vamos a modificar el contenido directamente en la entrada si es posible, 
-                        // pero JSZip entries son de solo lectura una vez cargadas.
-                        // La forma correcta es que el adaptador DEVUELVA un objeto con los cambios 
-                        // O que reciba el objeto ZIP raíz.
-                        
-                        // REVISIÓN DEL FLUJO zip.js: processLLMZip pasa 'zip.files'.
-                        // Para que esto funcione sin cambiar zip.js de nuevo, haremos un truco:
-                        // Modificaremos el contenido y lo guardaremos en una propiedad temporal 
-                        // o asumiremos que zip.js leerá esto.
-                        
-                        // MEJOR OPCIÓN SIN TOCAR zip.js AHORA:
-                        // Devolver un objeto Promise que resuelva con los contenidos modificados? 
-                        // No, la firma es async process(zipContents...).
-                        
-                        // Vamos a hacer lo que hace eXe: Modificar el zip directamente si tenemos acceso.
-                        // Pero aquí NO tenemos el objeto 'zip' raíz, solo 'zipContents' (las entradas).
-                        // Por tanto, este adaptador debe devolver un mapa de { filename: nuevoContenido }
-                        // Y zip.js es el encargado de aplicar esos cambios.
-                        
-                        // Como no podemos cambiar la firma de retorno fácilmente sin romper zip.js,
-                        // y zip.js actual llama a adapter.process y luego itera...
-                        // Espera, en mi última versión de zip.js, yo hacía:
-                        // const processedZipContents = await adapter.process(...);
-                        // Y luego iteraba processedZipContents.
-                        // POR TANTO: Este adaptador DEBE DEVOLVER el objeto map con los strings modificados.
-                        
-                        // Guardamos el resultado en el objeto que se devolverá.
-                        // Pero cuidado: zipContents original tiene objetos Entry, no strings.
-                        // Devolveremos un NUEVO objeto con los strings modificados para los targets,
-                        // y dejaremos los demás para que zip.js los copie del original.
-                        
-                        // Para señalizar esto, vamos a devolver un objeto parcial { filePath: stringContent }
-                        // El caller (zip.js) sabe que si es string, es contenido nuevo.
-                        
-                        // IMPLEMENTACIÓN DIRECTA AQUÍ:
-                        // Como no podemos devolver solo un fragmento fácilmente sin cambiar la lógica de retorno,
-                        // haremos que este proceso modifique un objeto externo o devuelva el mapa.
-                        // Devolvamos el mapa de cambios.
-                        
-                        // NOTA: Para que esto funcione con el zip.js actual proporcionado anteriormente,
-                        // el adaptador debe devolver un objeto donde las claves son los paths y los valores los strings.
-                        // zip.js luego fusiona esto.
-                        
-                        // Añadimos al resultado que devolveremos al final
-                        // Pero como estamos en un loop, acumulamos.
-                        // (Ver retorno al final de la función)
-                        
-                        // TRUCO: Vamos a modificar el objeto zipContents "in place" si es posible? No.
-                        // Vamos a retornar un objeto con los cambios.
-                        
                         // Acumulamos cambios en un objeto temporal
                         if (!this._changes) this._changes = {};
                         this._changes[filePath] = injectedContent;
@@ -187,7 +121,6 @@
             
             // Devolvemos el objeto con los cambios. 
             // zip.js (processLLMZip) debe esperar recibir este objeto de cambios.
-            // Si _changes está vacío, devolvemos zipContents original (aunque no debería pasar si detectó algo)
             return this._changes || {};
         }
     };
