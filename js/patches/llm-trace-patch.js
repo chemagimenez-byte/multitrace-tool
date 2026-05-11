@@ -1,12 +1,13 @@
 /**
- * Generador del parche de traza para LLM
+ * Parche de traza para SCORMs LLM.
+ * Versión Global.
  */
 (function() {
     window.getLLMTracePatch = function() {
         return `
         <script>
         (function() {
-            console.log('[MultiTrace] Inyectando parche para SCORM LLM...');
+            console.log('[MultiTrace-LLM] Inyectando parche de persistencia...');
             let api = null;
             let lastKnownProgress = 0;
             let saveInterval = null;
@@ -31,39 +32,45 @@
                 if (!findAPI()) return false;
                 try {
                     if (api.LMSInitialize) api.LMSInitialize();
-                    let storedProgress = 0;
                     
+                    // Recuperar progreso máximo anterior
+                    let storedProgress = 0;
                     if (api.GetValue) {
-                        const progressVal = api.GetValue('cmi.progress_measure');
-                        const suspendData = api.GetValue('cmi.suspend_data');
-                        if (progressVal && progressVal !== "") storedProgress = parseFloat(progressVal);
-                        else if (suspendData) {
+                        // Intento SCORM 2004
+                        let p = api.GetValue('cmi.progress_measure');
+                        if (p && p !== "") storedProgress = parseFloat(p);
+                        
+                        // Fallback suspend_data
+                        let s = api.GetValue('cmi.suspend_data');
+                        if (s) {
                             try {
-                                const data = JSON.parse(suspendData);
-                                storedProgress = data.maxProgress || 0;
-                            } catch(e) {}
+                                let d = JSON.parse(s);
+                                if (d.maxProgress > storedProgress) storedProgress = d.maxProgress;
+                            } catch(e){}
+                        }
+                        // Intento SCORM 1.2
+                        if (!storedProgress) {
+                            let score = api.GetValue('cmi.core.score.raw');
+                            if(score && score !== "") storedProgress = parseFloat(score);
+                            let s12 = api.GetValue('cmi.suspend_data');
+                            if (s12) {
+                                try {
+                                    let d = JSON.parse(s12);
+                                    if (d.maxProgress > storedProgress) storedProgress = d.maxProgress;
+                                } catch(e){}
+                            }
                         }
                     }
-                    if (!storedProgress && api.GetValue) {
-                         const score = api.GetValue('cmi.core.score.raw');
-                         if(score && score !== "") storedProgress = parseFloat(score);
-                         const suspendData12 = api.GetValue('cmi.suspend_data');
-                         if (suspendData12) {
-                            try {
-                                const data = JSON.parse(suspendData12);
-                                if (data.maxProgress > storedProgress) storedProgress = data.maxProgress;
-                            } catch(e) {}
-                         }
-                    }
-
+                    
                     lastKnownProgress = storedProgress;
-                    console.log('[MultiTrace] Progreso recuperado:', lastKnownProgress + '%');
+                    console.log('[MultiTrace-LLM] Progreso recuperado:', lastKnownProgress);
 
+                    // Guardado automático cada 5s
                     if (saveInterval) clearInterval(saveInterval);
                     saveInterval = setInterval(forceSave, 5000);
                     return true;
                 } catch (e) {
-                    console.error('[MultiTrace] Error iniciando SCORM:', e);
+                    console.error('[MultiTrace-LLM] Error init:', e);
                     return false;
                 }
             }
@@ -71,41 +78,30 @@
             function forceSave() {
                 if (!api) return;
                 try {
-                    let currentMax = lastKnownProgress;
-                    const dataToSave = { maxProgress: currentMax, timestamp: new Date().getTime() };
-                    
+                    const dataToSave = { maxProgress: lastKnownProgress, timestamp: new Date().getTime() };
                     if (api.SetValue) {
                         api.SetValue('cmi.suspend_data', JSON.stringify(dataToSave));
                         if (api.LMSCommit) api.LMSCommit();
                     }
-                } catch (e) {
-                    console.warn('[MultiTrace] Error en guardado automático:', e);
-                }
+                } catch (e) { console.warn('[MultiTrace-LLM] Error save:', e); }
             }
 
-            function hookCompletion() {
-                const originalFinish = window.finishSCORM;
-                window.finishSCORM = function() {
-                    forceSave();
-                    if (originalFinish) return originalFinish.apply(this, arguments);
-                    if (api && api.LMSFinish) return api.LMSFinish();
-                };
-                const originalEnd = window.endSCORM;
-                window.endSCORM = function() {
-                    forceSave();
-                    if (originalEnd) return originalEnd.apply(this, arguments);
-                };
-            }
+            // Hooks para finalización
+            window.finishSCORM = (function(orig) {
+                return function() { forceSave(); if(orig) return orig.apply(this, arguments); if(api && api.LMSFinish) return api.LMSFinish(); };
+            })(window.finishSCORM);
+            
+            window.endSCORM = (function(orig) {
+                return function() { forceSave(); if(orig) return orig.apply(this, arguments); };
+            })(window.endSCORM);
 
             if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', () => { initSCORM(); hookCompletion(); });
+                document.addEventListener('DOMContentLoaded', initSCORM);
             } else {
                 initSCORM();
-                hookCompletion();
             }
             window.MultiTraceForceSave = forceSave;
         })();
-        </script>
-        `;
+        </script>`;
     };
 })();
