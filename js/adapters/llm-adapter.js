@@ -1,36 +1,41 @@
-(function() {
-    // Asegurarnos de que las dependencias existen
-    if (!window.LLMDetector || !window.getLLMTracePatch) {
-        console.error('[ERROR] Faltan dependencias para LLMAdapter (Detector o Patch).');
-        return;
-    }
+/**
+ * Adaptador para SCORMs generados por LLM
+ * DEBE SER UNA CLASE GLOBAL PARA QUE 'new' FUNCIONE
+ */
+var MultiTraceLLMAdapter = (function () {
+    console.log("[DEBUG] Definiendo clase Adaptador LLM...");
 
+    // Definición de la clase
     class LLMAdapter {
         constructor() {
-            // ESTO ES LO QUE FALLABA ANTES: Definir ID y NAME explícitamente
-            this.id = 'llm-scorm'; 
+            this.id = 'llm-scorm'; // CRUCIAL: El ID que pide el registry
             this.name = 'LLM Generated SCORM';
+            console.log("[DEBUG] Instancia de LLMAdapter creada con ID:", this.id);
         }
 
         supports(zipContents, manifest) {
+            if (!window.LLMDetector) {
+                console.warn("[DEBUG] Detector LLM no cargado aún.");
+                return false;
+            }
             return window.LLMDetector.detect(zipContents, manifest);
         }
 
         async process(zipContents, manifest, options = {}) {
             console.log(`[MultiTrace] Procesando paquete como ${this.name}...`);
             
-            const patchScript = window.getLLMTracePatch();
-            const filesToModify = [];
+            if (!window.getLLMTracePatch) {
+                throw new Error("El parche LLM no está cargado.");
+            }
 
-            // 1. Identificar launch file
+            const patchScript = window.getLLMTracePatch();
             const resources = manifest.getElementsByTagName('resource');
             let launchFile = null;
 
+            // Buscar launch file
             for (let i = 0; i < resources.length; i++) {
-                const href = resources[i].getAttribute('href') || '';
-                const identifier = resources[i].getAttribute('identifier') || '';
-                
-                if (identifier === 'scorm' || href === 'index.html' || href === 'index.htm') {
+                const href = resources[i].getAttribute('href');
+                if (href && (href === 'index.html' || href === 'index.htm' || href === 'scorm.html')) {
                     launchFile = href;
                     break;
                 }
@@ -42,35 +47,27 @@
             }
 
             if (!launchFile) {
-                throw new Error('No se encontró el archivo de lanzamiento (index.html) en el SCORM LLM.');
+                throw new Error('No se encontró archivo de lanzamiento.');
             }
 
-            filesToModify.push(launchFile);
-
-            // 2. Inyectar parche
-            for (const filePath of filesToModify) {
-                if (zipContents[filePath]) {
-                    let content = zipContents[filePath];
-                    
-                    // Inyectar antes de </head>
-                    if (content.includes('</head>')) {
-                        content = content.replace('</head>', `${patchScript}\n</head>`);
-                    } else if (content.includes('</body>')) {
-                        content = content.replace('</body>', `${patchScript}\n</body>`);
-                    } else {
-                        content += `\n${patchScript}`;
-                    }
-
-                    zipContents[filePath] = content;
-                    console.log(`[MultiTrace] Parche inyectado en: ${filePath}`);
-                }
+            console.log(`[MultiTrace] Inyectando traza en: ${launchFile}`);
+            
+            let content = zipContents[launchFile];
+            if (content.includes('</head>')) {
+                content = content.replace('</head>', `${patchScript}</head>`);
+            } else if (content.includes('</body>')) {
+                content = content.replace('</body>', `${patchScript}</body>`);
+            } else {
+                content += patchScript;
             }
 
+            zipContents[launchFile] = content;
             return zipContents;
         }
     }
 
-    // Exponer la clase (no una instancia) para que register-adapters.js pueda instanciarla
+    // Asignar la CLASE (no una instancia) a la ventana global
     window.MultiTraceLLMAdapter = LLMAdapter;
-    console.log('[DEBUG] MultiTraceLLMAdapter cargado con ID:', new LLMAdapter().id);
+    
+    return LLMAdapter;
 })();
