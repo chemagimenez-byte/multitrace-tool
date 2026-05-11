@@ -81,3 +81,4 @@ export class LLMAdapter {
         return zipContents;
     }
 }
+window.MultiTraceLLMAdapter = LLMAdapter;
