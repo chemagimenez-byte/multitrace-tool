@@ -20,14 +20,35 @@
          * Comprueba si el paquete es un SCORM genérico (LLM)
          */
         supports: function(zipContents, manifest) {
-            try {
-                return Detector.detect(zipContents, manifest);
-            } catch (e) {
-                console.warn("[LLM Adapter] Error en detección:", e);
+            console.log("[DEBUG LLM] Ejecutando detección para:", zipContents.filename || "paquete.zip");
+            
+            // 1. Comprobación básica de manifiesto
+            if (!manifest) {
+                console.warn("[DEBUG LLM] Fallo: No hay manifiesto XML.");
                 return false;
             }
+    
+            // 2. Comprobación de archivos clave
+            const hasIndex = !!(zipContents['index.html'] || zipContents['./index.html']);
+            console.log("[DEBUG LLM] ¿Tiene index.html?", hasIndex);
+    
+            // 3. Comprobación de exclusiones (Rise/Storyline)
+            let isKnownVendor = false;
+            for (const path in zipContents) {
+                if (path.includes('story_content') || path.includes('html5/') || path.includes('rise')) {
+                    isKnownVendor = true;
+                    console.warn("[DEBUG LLM] Fallo: Detectado vendor conocido en ruta:", path);
+                    break;
+                }
+            }
+            if (isKnownVendor) return false;
+    
+            // 4. Llamada al detector
+            const result = window.MultiTraceLLMDetector.detect(zipContents, manifest);
+            console.log("[DEBUG LLM] Resultado final del detector:", result);
+            
+            return result;
         },
-
         /**
          * Inyecta la traza en el archivo principal
          */
