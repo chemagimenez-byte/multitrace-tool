@@ -1,48 +1,6 @@
 ```
-# Executable files
+# Executable/binary files
 multitrace-tool
 
-# Temporary and cache files
-*.tmp
-*.temp
-*.cache
-*.log
-
-# Environment files
-.env
-.env.local
-*.env.*
-
-# Build and distribution directories
-build/
-dist/
-target/
-out/
-
-# Dependencies
-node_modules/
-venv/
-.venv/
-__pycache__/
-*.egg-info/
-
-# IDE and editor files
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Compressed files
-*.zip
-*.gz
-*.tar
-*.tgz
-*.bz2
-*.xz
-*.7z
-*.rar
+# Preserve existing rules
 ```
