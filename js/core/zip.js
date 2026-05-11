@@ -223,6 +223,7 @@
   async function processLLMZip(file, options) {
     console.log("[DEBUG] zip.js processLLMZip()");
     
+    // 1. Cargar el ZIP
     const zip = await JSZip.loadAsync(file);
     const adapter = window.MultiTraceLLMAdapter;
 
@@ -230,7 +231,7 @@
       throw new Error("No se ha cargado el adaptador LLM.");
     }
 
-    // Leer manifiesto
+    // 2. Leer manifiesto
     let manifestFile = zip.file("imsmanifest.xml");
     if (!manifestFile) throw new Error("No se encuentra imsmanifest.xml en el paquete LLM.");
     
@@ -238,48 +239,26 @@
     let parser = new DOMParser();
     let xmlDoc = parser.parseFromString(manifestXml, "application/xml");
 
-    // Usar el método process del adaptador
+    // 3. Ejecutar el adaptador para obtener la lista de archivos a modificar y sus nuevos contenidos
+    // El adaptador devolverá un objeto { "index.html": "<nuevo contenido...", ... }
+    // IMPORTANTE: Pasamos zip.files (el mapa de objetos) y el XML.
     try {
-      const processedZipContents = await adapter.process(zip.files, xmlDoc, options);
+      const modifiedFilesMap = await adapter.process(zip.files, xmlDoc, options);
       
-      // Reconstruir el objeto ZIP con los contenidos modificados
-      // Nota: zip.files es solo lectura en JSZip, debemos crear uno nuevo o modificar entradas existentes
-      const newZip = new JSZip();
-      
-      for (const [filename, fileData] of Object.entries(processedZipContents)) {
-        if (typeof fileData === 'string') {
-            newZip.file(filename, fileData);
+      // 4. Aplicar las modificaciones DIRECTAMENTE sobre el objeto 'zip' original
+      // Iteramos sobre las claves devueltas por el adaptador (los archivos que quiso modificar)
+      for (const [filename, newContent] of Object.entries(modifiedFilesMap)) {
+        if (typeof newContent === 'string') {
+            // Sobrescribimos el archivo en el ZIP original con el nuevo string HTML
+            zip.file(filename, newContent);
+            console.log(`[DEBUG] Archivo sobrescrito en ZIP: ${filename}`);
         } else {
-            // Si es un objeto file de JSZip original (no modificado), copiar su contenido binario
-            // Pero como adapter.process devuelve strings modificados y pasa los originales,
-            // necesitamos manejar la copia de binarios si el adaptador no los tocó.
-            // Simplificación: El adaptador debería devolver todo el contenido necesario o 
-            // trabajamos directamente sobre el zip original modificando solo los targets.
-            
-            // CORRECCIÓN DE ESTRATEGIA: 
-            // El adaptador LLM modifica el objeto zip.files directamente (por referencia) o devuelve una mappa.
-            // Si devuelve una mappa con strings, rellenamos newZip. 
-            // Si hay archivos que no están en la mappa (binarios), debemos copiarlos del original.
+            console.warn(`[WARN] El adaptador devolvió contenido no-string para ${filename}, se ignora.`);
         }
       }
-      
-      // Estrategia simplificada y robusta:
-      // Iterar sobre el ZIP original. Si el filename está en processedZipContents, usar ese contenido.
-      // Si no, copiar el original.
-      for (const [filename, originalEntry] of Object.entries(zip.files)) {
-          if (processedZipContents[filename]) {
-              // Ya fue procesado/modificado por el adaptador
-              newZip.file(filename, processedZipContents[filename]);
-          } else {
-              // Copiar tal cual (usando async para obtener el blob/string si fuera necesario, 
-              // pero JSZip permite pasar la entrada directa si es compatible, o mejor leer y reescribir)
-              // Para asegurar integridad, leemos y reescribimos.
-              const content = await originalEntry.async("uint8array");
-              newZip.file(filename, content);
-          }
-      }
 
-      const outputBlob = await newZip.generateAsync({ type: "blob" });
+      // 5. Generar el ZIP final (que ahora contiene las modificaciones en memoria)
+      const outputBlob = await zip.generateAsync({ type: "blob" });
 
       return {
         blob: outputBlob,
