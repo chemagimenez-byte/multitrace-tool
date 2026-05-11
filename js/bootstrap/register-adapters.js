@@ -17,4 +17,9 @@
   if (window.MultiTraceExeLearningAdapter) {
     registry.register(window.MultiTraceExeLearningAdapter);
   }
+
+  // NUEVO: registrar adaptador de SCORMs generados por LLM
+  if (window.MultiTraceLLMAdapter) {
+    registry.register(window.MultiTraceLLMAdapter);
+  }
 })();
